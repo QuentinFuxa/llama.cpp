@@ -4038,6 +4038,59 @@ class Qwen2VLVisionModel(MmprojModel):
                 yield from super().modify_tensors(data_torch, name, bid)
 
 
+
+@ModelBase.register("Qwen3ASRForConditionalGeneration")
+class Qwen3ASRAudioModel(MmprojModel):
+    has_vision_encoder = False
+    has_audio_encoder = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_audio is not None
+        self.hparams_audio["hidden_size"] = self.hparams_audio["d_model"]
+        self.hparams_audio["intermediate_size"] = self.hparams_audio["encoder_ffn_dim"]
+        self.hparams_audio["num_attention_heads"] = self.hparams_audio["encoder_attention_heads"]
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        return self.global_config.get("thinker_config", {}).get("audio_config")
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN3A)
+        assert self.hparams_audio is not None
+        self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["num_mel_bins"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams_audio.get("layer_norm_eps", 1e-5))
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # SinusoidsPositionEmbedding (same as Qwen2.5 Omni)
+        assert self.hparams_audio is not None
+        max_timescale = 10000
+        length = self.hparams_audio.get("max_source_positions", 1500)
+        channels = self.hparams_audio["hidden_size"]
+        log_timescale_increment = np.log(max_timescale) / (channels // 2 - 1)
+        inv_timescales = torch.exp(-log_timescale_increment * torch.arange(channels // 2).float())
+        scaled_time = torch.arange(length)[:, np.newaxis] * inv_timescales[np.newaxis, :]
+        pos_embd = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=1).to(dtype=torch.float32)
+        yield ("audio_tower.embed_positions.weight", pos_embd)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".conv" in name and ".weight" in name:
+            return gguf.GGMLQuantizationType.F16
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("thinker."):
+            name = name.replace("thinker.", "")
+
+        if name.startswith("audio_tower."):
+            # conv2d bias needs unsqueeze for ggml conv2d
+            if "conv2d" in name and name.endswith(".bias"):
+                data_torch = data_torch.unsqueeze(-1).unsqueeze(-1)
+            return [(self.map_tensor_name(name), data_torch)]
+
+        return []  # skip text model tensors
+
+
 @ModelBase.register("Qwen2_5OmniModel")
 class Qwen25OmniModel(Qwen2VLVisionModel):
     has_vision_encoder = True
@@ -4695,6 +4748,31 @@ class Glm4VVisionModel(Qwen3VLVisionModel):
         if name.startswith("visual.merger."):
             yield from ModelBase.modify_tensors(self, data_torch, name, bid)
             return
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Qwen3ASRForConditionalGeneration")
+class Qwen3ASRTextModel(Qwen3Model):
+    model_arch = gguf.MODEL_ARCH.QWEN3
+
+    def set_gguf_parameters(self):
+        # Override to get text_config from thinker_config
+        if "thinker_config" in self.hparams:
+            text_config = self.hparams["thinker_config"].get("text_config", {})
+            # Merge text_config into hparams so parent class can use them
+            for k, v in text_config.items():
+                if k not in self.hparams:
+                    self.hparams[k] = v
+        super().set_gguf_parameters()
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip audio tensors - they go in the mmproj file
+        if "audio_tower" in name:
+            return []
+
+        # Strip thinker prefix
+        name = name.replace("thinker.", "")
+
         yield from super().modify_tensors(data_torch, name, bid)
 
 
