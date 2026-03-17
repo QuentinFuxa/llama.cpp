@@ -4764,6 +4764,10 @@ class Qwen3ASRTextModel(Qwen3Model):
                 if k not in self.hparams:
                     self.hparams[k] = v
         super().set_gguf_parameters()
+        # Fix BOS/EOS for Qwen3-ASR (thinker_config has None, defaults are wrong)
+        self.gguf_writer.add_bos_token_id(151643)
+        self.gguf_writer.add_eos_token_id(151645)
+        self.gguf_writer.add_add_bos_token(False)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Skip audio tensors - they go in the mmproj file

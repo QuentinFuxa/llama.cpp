@@ -291,7 +291,8 @@ ggml_tensor * clip_graph::build_vit(
             norm_type norm_t,
             ffn_op_type ffn_t,
             ggml_tensor * learned_pos_embd,
-            std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos
+            std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos,
+            ggml_tensor * kq_mask_ext
         ) {
     if (learned_pos_embd) {
         inp = ggml_add(ctx0, inp, learned_pos_embd);
@@ -398,7 +399,7 @@ ggml_tensor * clip_graph::build_vit(
             }
 
             cur = build_attn(layer.o_w, layer.o_b,
-                Qcur, Kcur, Vcur, nullptr, kq_scale, il);
+                Qcur, Kcur, Vcur, kq_mask_ext, kq_scale, il);
             cb(cur, "attn_out", il);
         }
 
@@ -3522,10 +3523,19 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_QWEN3A:
             {
-                // Qwen3-ASR: 3 conv2d layers each with stride=2 (total 8x downsampling in time)
-                // n_mel_bins=128 -> after 3 conv2d: ceil((128+2*1-3)/2+1) = 64, then 32, then 16
-                // Time dimension: n_frames/8
-                n_patches = img->nx / 8;
+                // Qwen3-ASR uses chunked conv2d processing (chunk_size = 100 frames)
+                // Each full chunk (100 frames) produces 13 tokens after 3x conv2d stride-2
+                // The last chunk may be shorter and produce fewer tokens
+                const int chunk_frames = 100; // n_window * 2
+                const int n_frames = img->nx;
+                const int n_chunks = (n_frames + chunk_frames - 1) / chunk_frames;
+                const int last_chunk = (n_frames % chunk_frames == 0) ? chunk_frames : (n_frames % chunk_frames);
+                // Compute tokens for last chunk: apply 3x conv2d_out_size
+                int last_tokens = last_chunk;
+                for (int i = 0; i < 3; i++) {
+                    last_tokens = (last_tokens + 2 * 1 - 3) / 2 + 1;
+                }
+                n_patches = (n_chunks - 1) * 13 + last_tokens;
             } break;
         case PROJECTOR_TYPE_GLMA:
             {
@@ -3665,9 +3675,65 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         const auto & mel_inp = imgs.entries[0];
         const int n_step = mel_inp->nx;
         const int n_mel  = mel_inp->ny;
-        std::vector<float> inp_raw(n_step * n_mel);
-        std::memcpy(inp_raw.data(), mel_inp->buf.data(), n_step * n_mel * sizeof(float));
-        set_input_f32("inp_raw", inp_raw);
+
+        if (ctx->model.proj_type == PROJECTOR_TYPE_QWEN3A) {
+            // Qwen3-ASR: split mel into chunks and pad to uniform size
+            // This matches PyTorch's chunked conv2d processing
+            const int chunk_frames = 100; // n_window * 2
+            const int n_chunks = (n_step + chunk_frames - 1) / chunk_frames;
+            const int padded_size = chunk_frames * n_mel * n_chunks;
+
+            std::vector<float> inp_raw(padded_size, 0.0f); // zero-padded
+
+            for (int c = 0; c < n_chunks; c++) {
+                const int src_start = c * chunk_frames;
+                const int frames_in_chunk = std::min(chunk_frames, n_step - src_start);
+                for (int m = 0; m < n_mel; m++) {
+                    for (int t = 0; t < frames_in_chunk; t++) {
+                        // Source: mel[mel_bin * n_step + time]
+                        // Dest: ggml 4D [IW=100, IH=128, IC=1, N=n_chunks]
+                        inp_raw[c * (chunk_frames * n_mel) + m * chunk_frames + t]
+                            = mel_inp->buf[m * n_step + src_start + t];
+                    }
+                }
+            }
+            set_input_f32("inp_raw", inp_raw);
+
+            // Create block-diagonal window mask for windowed attention
+            // Window size = tokens_per_chunk * (n_window_infer / chunk_size) = 13 * 8 = 104
+            const int tokens_per_chunk = 13;
+            const int n_window_infer = 800;
+            const int window_size = tokens_per_chunk * (n_window_infer / chunk_frames);
+            const int last_chunk_frames = (n_step % chunk_frames == 0) ? chunk_frames : (n_step % chunk_frames);
+            int last_tokens = last_chunk_frames;
+            for (int i = 0; i < 3; i++) last_tokens = (last_tokens + 2*1 - 3) / 2 + 1;
+            const int total_tokens = (n_chunks - 1) * tokens_per_chunk + last_tokens;
+
+            // Fill F16 window mask
+            std::vector<ggml_fp16_t> mask_f16(total_tokens * total_tokens);
+            ggml_fp16_t neg_inf = ggml_fp32_to_fp16(-INFINITY);
+            ggml_fp16_t zero_f16 = ggml_fp32_to_fp16(0.0f);
+            for (int i = 0; i < total_tokens * total_tokens; i++) {
+                mask_f16[i] = neg_inf;
+            }
+            for (int i = 0; i < total_tokens; i++) {
+                int window_i = i / window_size;
+                int ws = window_i * window_size;
+                int we = std::min(ws + window_size, total_tokens);
+                for (int j = ws; j < we; j++) {
+                    mask_f16[i * total_tokens + j] = zero_f16;
+                }
+            }
+            {
+                auto inp_t = get_inp_tensor("window_mask");
+                GGML_ASSERT(inp_t != nullptr);
+                memcpy(inp_t->data, mask_f16.data(), mask_f16.size() * sizeof(ggml_fp16_t));
+            }
+        } else {
+            std::vector<float> inp_raw(n_step * n_mel);
+            std::memcpy(inp_raw.data(), mel_inp->buf.data(), n_step * n_mel * sizeof(float));
+            set_input_f32("inp_raw", inp_raw);
+        }
     }
 
     // set input per projector
