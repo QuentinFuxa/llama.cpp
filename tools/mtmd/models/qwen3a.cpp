@@ -31,6 +31,7 @@ ggml_cgraph * clip_graph_qwen3a::build() {
     // achieves cosine similarity 1.0 with the reference implementation.
 
     const int n_frames = img.nx;
+    printf("DEBUG build: n_frames=%d n_mel=%d\n", img.nx, img.ny);
     const int n_mel    = img.ny;
 
     // Compute chunk parameters
@@ -92,7 +93,7 @@ ggml_cgraph * clip_graph_qwen3a::build() {
         //
         // Step 1: Permute [T, F, C, B] -> [F, C, T, B] via permute(1, 2, 0, 3)
         // Then flatten F*C to get [F*C, T, B]
-        inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);  // [T,F,C,B] -> [F,C,T,B] => flatten to [FC,T,B]
+        inp = ggml_permute(ctx0, inp, 2, 1, 0, 3);  // [T,F,C,B] -> [F,C,T,B] => flatten to [FC,T,B]
         inp = ggml_cont(ctx0, inp);
 
         // Flatten freq * channels dimensions
@@ -115,6 +116,7 @@ ggml_cgraph * clip_graph_qwen3a::build() {
         // Reshape back to [d_model, T, B]
         inp = ggml_reshape_3d(ctx0, inp, n_embd, QWEN3A_TOKENS_PER_FULL_CHUNK, n_chunks);
         cb(inp, "after_conv_out", -1);
+    ggml_set_output(inp);
     }
 
     // Add positional embeddings (same for each chunk, broadcast over batch dim)
@@ -167,6 +169,7 @@ ggml_cgraph * clip_graph_qwen3a::build() {
     }
     flat = ggml_cont(ctx0, flat);
     cb(flat, "flat_tokens", -1);
+    ggml_set_output(flat);
 
     // Create block-diagonal windowed attention mask
     // Window size: tokens_per_chunk * (n_window_infer / chunk_size) = 13 * 8 = 104

@@ -3698,6 +3698,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
             }
             set_input_f32("inp_raw", inp_raw);
+            printf("DEBUG inp_raw first5: [%.5f, %.5f, %.5f, %.5f, %.5f]\n", inp_raw[0], inp_raw[1], inp_raw[2], inp_raw[3], inp_raw[4]);
 
             // Create block-diagonal window mask for windowed attention
             // Window size = tokens_per_chunk * (n_window_infer / chunk_size) = 13 * 8 = 104
