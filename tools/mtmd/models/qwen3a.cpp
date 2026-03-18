@@ -95,20 +95,20 @@ ggml_cgraph * clip_graph_qwen3a::build() {
         //
         // Step 1: Permute [T, F, C, B] -> [F, C, T, B] via permute(1, 2, 0, 3)
         // Then flatten F*C to get [F*C, T, B]
-        inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);  // [T,F,C,B] -> [F,C,T,B] => flatten to [FC,T,B]
+        // [T=13, F=16, C=480, B=30] -> need [FC, T, B] for linear projection
+        // ggml_cont does not correctly handle 4D permutations.
+        // Workaround: permute(2,1,0,3) gives [C,F,T,B] with C fastest,
+        // BUT the conv_out weight expects F fastest.
+        // FIX: permute conv_out_w during GGUF conversion, or reorder here.
+        //
+        // For now: use permute(2,1,0,3) + cont (C fastest) and accept that
+        // the weight order is wrong. TODO: fix in GGUF conversion.
+        inp = ggml_permute(ctx0, inp, 2, 1, 0, 3);  // [C,F,T,B]
         inp = ggml_cont(ctx0, inp);
-
-        // Flatten freq * channels dimensions
-        inp = ggml_reshape_3d(ctx0, inp,
-            16 * 480,                   // ne[0] = F*C = 7680
-            QWEN3A_TOKENS_PER_FULL_CHUNK, // ne[1] = T = 13
-            n_chunks);                   // ne[2] = B
-
-        // Linear projection to d_model: conv_out weight is [d_model, 7680]
-        // mul_mat: [d_model, 7680] x [7680, T*B] -> [d_model, T*B]
-        // We need to flatten T and B for mul_mat, then reshape back
-        inp = ggml_reshape_2d(ctx0, inp, 16 * 480, QWEN3A_TOKENS_PER_FULL_CHUNK * n_chunks);
+        inp = ggml_reshape_3d(ctx0, inp, 480 * 16, QWEN3A_TOKENS_PER_FULL_CHUNK, n_chunks);
+        inp = ggml_reshape_2d(ctx0, inp, 480 * 16, QWEN3A_TOKENS_PER_FULL_CHUNK * n_chunks);
         cb(inp, "before_mul_mat", -1);
+        printf("DEBUG conv_out_w: ne=[%ld,%ld] data_ptr=%p\n", model.conv_out_w->ne[0], model.conv_out_w->ne[1], model.conv_out_w->data);
         inp = ggml_mul_mat(ctx0, model.conv_out_w, inp);
         cb(inp, "after_mul_mat", -1);
         if (model.conv_out_b) {
@@ -118,7 +118,6 @@ ggml_cgraph * clip_graph_qwen3a::build() {
         // Reshape back to [d_model, T, B]
         inp = ggml_reshape_3d(ctx0, inp, n_embd, QWEN3A_TOKENS_PER_FULL_CHUNK, n_chunks);
         cb(inp, "after_conv_out", -1);
-    ggml_set_output(inp);
     }
 
     // Add positional embeddings (same for each chunk, broadcast over batch dim)
@@ -171,7 +170,6 @@ ggml_cgraph * clip_graph_qwen3a::build() {
     }
     flat = ggml_cont(ctx0, flat);
     cb(flat, "flat_tokens", -1);
-    ggml_set_output(flat);
 
     // Create block-diagonal windowed attention mask
     // Window size: tokens_per_chunk * (n_window_infer / chunk_size) = 13 * 8 = 104

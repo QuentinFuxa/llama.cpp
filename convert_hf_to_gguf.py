@@ -4086,6 +4086,11 @@ class Qwen3ASRAudioModel(MmprojModel):
             # conv2d bias needs unsqueeze for ggml conv2d
             if "conv2d" in name and name.endswith(".bias"):
                 data_torch = data_torch.unsqueeze(-1).unsqueeze(-1)
+            # conv_out weight: reorder 7680 dim from F-fastest to C-fastest
+            # to match ggml permute(2,1,0,3) which gives C as ne[0]
+            if "conv_out" in name and name.endswith(".weight"):
+                out_dim = data_torch.shape[0]  # 1024
+                data_torch = data_torch.reshape(out_dim, 480, 16).permute(0, 2, 1).contiguous().reshape(out_dim, 480 * 16)
             return [(self.map_tensor_name(name), data_torch)]
 
         return []  # skip text model tensors

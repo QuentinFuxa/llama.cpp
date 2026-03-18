@@ -4070,6 +4070,26 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             printf("Saved flat_tokens: %ld elements to /tmp/ggml_flat_tokens.bin\n", (long)data.size());
         }
     }
+    {
+        auto * bm = ggml_graph_get_tensor(gf, "before_mul_mat");
+        if (bm) {
+            std::vector<float> bmdata(ggml_nelements(bm));
+            ggml_backend_tensor_get(bm, bmdata.data(), 0, ggml_nbytes(bm));
+            FILE * bf = fopen("/tmp/ggml_before_mul_mat.bin", "wb");
+            fwrite(bmdata.data(), sizeof(float), bmdata.size(), bf);
+            fclose(bf);
+            printf("Saved before_mul_mat: %ld elements\n", (long)bmdata.size());
+        }
+        auto * co = ggml_graph_get_tensor(gf, "after_conv_out");
+        if (co) {
+            std::vector<float> codata(ggml_nelements(co));
+            ggml_backend_tensor_get(co, codata.data(), 0, ggml_nbytes(co));
+            FILE * cf = fopen("/tmp/ggml_after_conv_out.bin", "wb");
+            fwrite(codata.data(), sizeof(float), codata.size(), cf);
+            fclose(cf);
+            printf("Saved after_conv_out: %ld elements\n", (long)codata.size());
+        }
+    }
 
     // the last node is the embedding tensor
     ggml_tensor * embeddings = ggml_graph_node(gf, -1);
