@@ -63,6 +63,8 @@ ggml_cgraph * clip_graph_qwen3a::build() {
         inp = ggml_add(ctx0, inp, model.conv2d_1_b);
         inp = ggml_gelu_erf(ctx0, inp);
 
+        cb(inp, "after_conv1_gelu", -1);
+        ggml_set_output(inp);
         // Conv2d(480, 480, 3, stride=2, padding=1) + GELU
         inp = ggml_conv_2d(ctx0, model.conv2d_2_w, inp, 2, 2, 1, 1, 1, 1);
         inp = ggml_add(ctx0, inp, model.conv2d_2_b);
@@ -93,7 +95,7 @@ ggml_cgraph * clip_graph_qwen3a::build() {
         //
         // Step 1: Permute [T, F, C, B] -> [F, C, T, B] via permute(1, 2, 0, 3)
         // Then flatten F*C to get [F*C, T, B]
-        inp = ggml_permute(ctx0, inp, 2, 1, 0, 3);  // [T,F,C,B] -> [F,C,T,B] => flatten to [FC,T,B]
+        inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);  // [T,F,C,B] -> [F,C,T,B] => flatten to [FC,T,B]
         inp = ggml_cont(ctx0, inp);
 
         // Flatten freq * channels dimensions
@@ -190,6 +192,7 @@ ggml_cgraph * clip_graph_qwen3a::build() {
                             nullptr, // no add_pos callback
                             window_mask); // block-diagonal windowed attention
     cb(cur, "after_transformer", -1);
+    ggml_set_output(cur);
 
     // Projector: proj1 -> GELU -> proj2
     cur = build_ffn(cur,

@@ -4058,6 +4058,19 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         }
     }
 
+    // Save flat_tokens for Python comparison
+    {
+        auto * ft = ggml_graph_get_tensor(gf, "flat_tokens");
+        if (ft) {
+            std::vector<float> data(ggml_nelements(ft));
+            ggml_backend_tensor_get(ft, data.data(), 0, ggml_nbytes(ft));
+            FILE * f = fopen("/tmp/ggml_flat_tokens.bin", "wb");
+            fwrite(data.data(), sizeof(float), data.size(), f);
+            fclose(f);
+            printf("Saved flat_tokens: %ld elements to /tmp/ggml_flat_tokens.bin\n", (long)data.size());
+        }
+    }
+
     // the last node is the embedding tensor
     ggml_tensor * embeddings = ggml_graph_node(gf, -1);
 
