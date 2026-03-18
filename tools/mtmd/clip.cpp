@@ -4039,6 +4039,24 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         return false;
     }
 
+    // DEBUG: dump intermediate tensor values
+    {
+        const char * names[] = {"after_conv_blocks", "after_conv_out", "after_pos_embd", "flat_tokens", "after_transformer", "projected", NULL};
+        for (int i = 0; names[i]; i++) {
+            ggml_tensor * t = ggml_graph_get_tensor(gf, names[i]);
+            if (t) {
+                std::vector<float> data(ggml_nelements(t));
+                ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
+                double sum = 0;
+                for (auto v : data) sum += v;
+                double mean = sum / data.size();
+                printf("DEBUG %s: ne=[%ld,%ld,%ld,%ld] mean=%.6f first5=[%.5f,%.5f,%.5f,%.5f,%.5f]\n",
+                    names[i], t->ne[0], t->ne[1], t->ne[2], t->ne[3],
+                    mean, data[0], data[1], data[2], data[3], data[4]);
+            }
+        }
+    }
+
     // the last node is the embedding tensor
     ggml_tensor * embeddings = ggml_graph_node(gf, -1);
 
@@ -4048,6 +4066,28 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     if (n_tokens_out != expected_n_tokens_out) {
         LOG_ERR("%s: expected output %d tokens, got %d\n", __func__, expected_n_tokens_out, n_tokens_out);
         GGML_ABORT("Invalid number of output tokens");
+    }
+
+    // Optionally load pre-computed embeddings from file (hybrid mode)
+    const char * precomputed = std::getenv("MTMD_PRECOMPUTED_EMBEDDINGS");
+    if (precomputed != nullptr && vec != nullptr) {
+        FILE * f = fopen(precomputed, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long fsize = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            long expected = ggml_nbytes(embeddings);
+            if (fsize == expected) {
+                fread(vec, 1, fsize, f);
+                fclose(f);
+                LOG_INF("Loaded pre-computed embeddings from %s (%ld bytes)\n", precomputed, fsize);
+                return true;
+            } else {
+                fclose(f);
+                LOG_ERR("Pre-computed embeddings size mismatch: file=%ld expected=%ld\n", fsize, expected);
+                // Fall through to use computed embeddings
+            }
+        }
     }
 
     // copy the embeddings to the location passed by the user

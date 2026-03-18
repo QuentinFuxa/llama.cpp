@@ -54,6 +54,7 @@ ggml_cgraph * clip_graph_qwen3a::build() {
     // Our inp: ne=[100, 128, 1, n_chunks] which is [IW=100, IH=128, IC=1, N=n_chunks]
     {
         // Conv2d(1, 480, 3, stride=2, padding=1) + GELU
+        printf("DEBUG n_embd=%d\n", n_embd);
         printf("DEBUG conv2d_1: kernel ne=[%ld,%ld,%ld,%ld] input ne=[%ld,%ld,%ld,%ld]\n",
             model.conv2d_1_w->ne[0], model.conv2d_1_w->ne[1], model.conv2d_1_w->ne[2], model.conv2d_1_w->ne[3],
             inp->ne[0], inp->ne[1], inp->ne[2], inp->ne[3]);
@@ -91,7 +92,7 @@ ggml_cgraph * clip_graph_qwen3a::build() {
         //
         // Step 1: Permute [T, F, C, B] -> [F, C, T, B] via permute(1, 2, 0, 3)
         // Then flatten F*C to get [F*C, T, B]
-        inp = ggml_permute(ctx0, inp, 2, 1, 0, 3);  // [T,F,C,B] -> [C,F,T,B] matching PyTorch permute(0,3,1,2) // ne = [F=16, C=480, T=13, B=n_chunks]
+        inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);  // [T,F,C,B] -> [F,C,T,B] => flatten to [FC,T,B]
         inp = ggml_cont(ctx0, inp);
 
         // Flatten freq * channels dimensions
@@ -104,7 +105,9 @@ ggml_cgraph * clip_graph_qwen3a::build() {
         // mul_mat: [d_model, 7680] x [7680, T*B] -> [d_model, T*B]
         // We need to flatten T and B for mul_mat, then reshape back
         inp = ggml_reshape_2d(ctx0, inp, 16 * 480, QWEN3A_TOKENS_PER_FULL_CHUNK * n_chunks);
+        cb(inp, "before_mul_mat", -1);
         inp = ggml_mul_mat(ctx0, model.conv_out_w, inp);
+        cb(inp, "after_mul_mat", -1);
         if (model.conv_out_b) {
             inp = ggml_add(ctx0, inp, model.conv_out_b);
         }
