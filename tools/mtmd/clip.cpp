@@ -3698,7 +3698,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
             }
             set_input_f32("inp_raw", inp_raw);
-            printf("DEBUG inp_raw first5: [%.5f, %.5f, %.5f, %.5f, %.5f]\n", inp_raw[0], inp_raw[1], inp_raw[2], inp_raw[3], inp_raw[4]);
 
             // Create block-diagonal window mask for windowed attention
             // Window size = tokens_per_chunk * (n_window_infer / chunk_size) = 13 * 8 = 104
@@ -4051,7 +4050,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 double sum = 0;
                 for (auto v : data) sum += v;
                 double mean = sum / data.size();
-                printf("DEBUG %s: ne=[%ld,%ld,%ld,%ld] mean=%.6f first5=[%.5f,%.5f,%.5f,%.5f,%.5f]\n",
                     names[i], t->ne[0], t->ne[1], t->ne[2], t->ne[3],
                     mean, data[0], data[1], data[2], data[3], data[4]);
             }

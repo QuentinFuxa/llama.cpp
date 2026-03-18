@@ -31,7 +31,6 @@ ggml_cgraph * clip_graph_qwen3a::build() {
     // achieves cosine similarity 1.0 with the reference implementation.
 
     const int n_frames = img.nx;
-    printf("DEBUG build: n_frames=%d n_mel=%d\n", img.nx, img.ny);
     const int n_mel    = img.ny;
 
     // Compute chunk parameters
@@ -55,8 +54,6 @@ ggml_cgraph * clip_graph_qwen3a::build() {
     // Our inp: ne=[100, 128, 1, n_chunks] which is [IW=100, IH=128, IC=1, N=n_chunks]
     {
         // Conv2d(1, 480, 3, stride=2, padding=1) + GELU
-        printf("DEBUG n_embd=%d\n", n_embd);
-        printf("DEBUG conv2d_1: kernel ne=[%ld,%ld,%ld,%ld] input ne=[%ld,%ld,%ld,%ld]\n",
             model.conv2d_1_w->ne[0], model.conv2d_1_w->ne[1], model.conv2d_1_w->ne[2], model.conv2d_1_w->ne[3],
             inp->ne[0], inp->ne[1], inp->ne[2], inp->ne[3]);
         inp = ggml_conv_2d(ctx0, model.conv2d_1_w, inp, 2, 2, 1, 1, 1, 1);
@@ -64,7 +61,6 @@ ggml_cgraph * clip_graph_qwen3a::build() {
         inp = ggml_gelu_erf(ctx0, inp);
 
         cb(inp, "after_conv1_gelu", -1);
-        ggml_set_output(inp);
         // Conv2d(480, 480, 3, stride=2, padding=1) + GELU
         inp = ggml_conv_2d(ctx0, model.conv2d_2_w, inp, 2, 2, 1, 1, 1, 1);
         inp = ggml_add(ctx0, inp, model.conv2d_2_b);
@@ -108,7 +104,6 @@ ggml_cgraph * clip_graph_qwen3a::build() {
         inp = ggml_reshape_3d(ctx0, inp, 480 * 16, QWEN3A_TOKENS_PER_FULL_CHUNK, n_chunks);
         inp = ggml_reshape_2d(ctx0, inp, 480 * 16, QWEN3A_TOKENS_PER_FULL_CHUNK * n_chunks);
         cb(inp, "before_mul_mat", -1);
-        printf("DEBUG conv_out_w: ne=[%ld,%ld] data_ptr=%p\n", model.conv_out_w->ne[0], model.conv_out_w->ne[1], model.conv_out_w->data);
         inp = ggml_mul_mat(ctx0, model.conv_out_w, inp);
         cb(inp, "after_mul_mat", -1);
         if (model.conv_out_b) {
